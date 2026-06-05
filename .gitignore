@@ -1,0 +1,6 @@
+# Rust build artifacts
+/target
+
+# Backups / editor cruft
+**/*.rs.bk
+*.swp
