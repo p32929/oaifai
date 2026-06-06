@@ -628,9 +628,39 @@ fn run_connect_cli(ssid: &str, pass: &str, dry_run: bool) {
     }
 }
 
+/// True if running as root (euid 0).
+fn is_root() -> bool {
+    std::process::Command::new("id")
+        .arg("-u")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim() == "0")
+        .unwrap_or(false)
+}
+
+/// Re-exec the current binary under sudo, forwarding all args, then exit.
+fn reexec_with_sudo() -> ! {
+    let exe = std::env::current_exe().unwrap_or_else(|_| "oaifai".into());
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match std::process::Command::new("sudo").arg(exe).args(&args).status() {
+        Ok(s) => std::process::exit(s.code().unwrap_or(1)),
+        Err(e) => {
+            eprintln!("oaifai needs root; failed to elevate with sudo: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let dry_run = args.iter().any(|a| a == "--dry-run");
+
+    // Everything except headless snapshot rendering needs root (scan + netplan).
+    // Auto-elevate so users can simply run `oaifai`.
+    if !args.iter().any(|a| a == "--snapshot") && !is_root() {
+        reexec_with_sudo();
+    }
 
     if let Some(pos) = args.iter().position(|a| a == "--connect") {
         let ssid = args.get(pos + 1).cloned().unwrap_or_default();
