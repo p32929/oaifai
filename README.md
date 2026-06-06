@@ -13,12 +13,12 @@ Built with [ratatui](https://ratatui.rs). Single static-ish binary, ~640 KB, zer
 ### Network list
 All networks in range — strongest first, deduplicated — with live signal bars and quality color. The network you're **already connected to** is highlighted and shows its IP beside the name (and isn't selectable). There's also a row at the top to enter a hidden/manual network by name.
 
-![Network list](PASTE_LIST_IMAGE_URL_HERE)
+<img width="972" height="647" alt="Network list" src="https://github.com/user-attachments/assets/93220cf7-d088-4a83-9f73-d5d637b7a7f2" />
 
-### Asking for password
+### Enter password
 After choosing a network, enter the password (`Tab` toggles visibility). Leave it blank to connect to an open network.
 
-![Password prompt](PASTE_PASSWORD_IMAGE_URL_HERE)
+<img width="972" height="647" alt="Enter password" src="https://github.com/user-attachments/assets/8c04d7e8-44ec-46e7-8fb1-c519387a1dba" />
 
 ---
 
@@ -141,4 +141,4 @@ cargo run -- --snapshot list      # also: password | done
 
 ## License
 
-MIT. Do whatever; no warranty.
+[MIT](LICENSE) © p32929. Do whatever; no warranty.
