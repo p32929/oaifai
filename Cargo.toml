@@ -1,5 +1,5 @@
 [package]
-name = "wifi-tui"
+name = "oaifai"
 version = "0.1.0"
 edition = "2021"
 description = "A nice TUI to scan and connect WiFi networks on netplan/networkd systems"

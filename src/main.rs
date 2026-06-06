@@ -1,13 +1,13 @@
-// wifi-tui — a full-screen TUI to scan and connect to WiFi networks.
+// oaifai — a full-screen TUI to scan and connect to WiFi networks.
 //
 // System mechanism (Ubuntu Server, no NetworkManager):
 //   * scan    -> `iw dev <iface> scan`
 //   * connect -> rewrite /etc/netplan/<file>.yaml + `netplan apply`
 //
 // Must be run as root (scanning and writing netplan both need it):
-//   sudo wifi-tui                               # the TUI
-//   sudo wifi-tui --list                        # plain list, no changes
-//   sudo wifi-tui --connect "SSID" "PASSWORD"   # non-interactive
+//   sudo oaifai                               # the TUI
+//   sudo oaifai --list                        # plain list, no changes
+//   sudo oaifai --connect "SSID" "PASSWORD"   # non-interactive
 //   add --dry-run to print what would happen without applying.
 
 use std::os::unix::fs::PermissionsExt;
@@ -25,7 +25,7 @@ use ratatui::{DefaultTerminal, Frame};
 
 const IFACE: &str = "wlp1s0";
 const NETPLAN_FILE: &str = "/etc/netplan/00-installer-config.yaml";
-const BACKUP_FILE: &str = "/etc/netplan/00-installer-config.yaml.wifi-tui.bak";
+const BACKUP_FILE: &str = "/etc/netplan/00-installer-config.yaml.oaifai.bak";
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 #[derive(Clone, Debug)]
@@ -431,7 +431,7 @@ impl App {
 
     fn render(&mut self, f: &mut Frame) {
         let area = f.area();
-        let title = " WiFi Connect ";
+        let title = "  oaifai  ";
         let outer = Block::bordered()
             .title(title)
             .title_alignment(Alignment::Center)
@@ -636,7 +636,7 @@ fn main() {
         let ssid = args.get(pos + 1).cloned().unwrap_or_default();
         let pass = args.get(pos + 2).cloned().unwrap_or_default();
         if ssid.is_empty() {
-            eprintln!("usage: wifi-tui --connect \"SSID\" \"PASSWORD\"");
+            eprintln!("usage: oaifai --connect \"SSID\" \"PASSWORD\"");
             std::process::exit(2);
         }
         run_connect_cli(&ssid, &pass, dry_run);
