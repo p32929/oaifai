@@ -94,7 +94,9 @@ sudo oaifai
 | --- | --- |
 | `↑` / `↓` | Move selection |
 | `Enter` | Select network / confirm |
-| `Ctrl+S` | Toggle password visibility |
+| `Tab` | Toggle password visibility |
+| `r` | Rescan networks |
+| `Ctrl+U` | Clear the current input field |
 | `Esc` | Back / cancel |
 | `q` | Quit (from the list/loading screen) |
 
