@@ -10,35 +10,15 @@ Built with [ratatui](https://ratatui.rs). Single static-ish binary, ~640 KB, zer
 
 ## Screenshots
 
-### 1. Scanning
-The app launches, spins up a background scan, and shows a spinner while `iw` sweeps the air.
-
-![Scanning](docs/screenshots/01-scanning.png)
-
-### 2. Network list
+### Network list
 All networks in range — strongest first, deduplicated — with live signal bars and quality color. The network you're **already connected to** is highlighted and shows its IP beside the name (and isn't selectable). There's also a row at the top to enter a hidden/manual network by name.
 
-![Network list](docs/screenshots/02-list.png)
+![Network list](PASTE_LIST_IMAGE_URL_HERE)
 
-### 3. Manual entry
-Pick "Enter network name manually" to type an SSID that isn't broadcast (or that you just want to type).
+### Asking for password
+After choosing a network, enter the password (`Tab` toggles visibility). Leave it blank to connect to an open network.
 
-![Manual SSID entry](docs/screenshots/03-manual.png)
-
-### 4. Password
-After choosing a network (from the list or manually), enter the password. Toggle visibility with `Ctrl+S`. Open networks skip straight past this.
-
-![Password entry](docs/screenshots/04-password.png)
-
-### 5. Connecting
-oaifai backs up your current netplan config, writes the new one, runs `netplan apply`, and waits for the link to come up — spinner all the while.
-
-![Connecting](docs/screenshots/05-connecting.png)
-
-### 6. Result
-Success shows the connected SSID and the assigned IP. On failure, oaifai **automatically restores** your previous config so you're never left worse off.
-
-![Result](docs/screenshots/06-done.png)
+![Password prompt](PASTE_PASSWORD_IMAGE_URL_HERE)
 
 ---
 
