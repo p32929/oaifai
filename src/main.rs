@@ -8,6 +8,7 @@
 //   sudo oaifai                               # the TUI
 //   sudo oaifai --list                        # plain list, no changes
 //   sudo oaifai --connect "SSID" "PASSWORD"   # non-interactive
+//   sudo oaifai --disconnect                  # drop the current network
 //   add --dry-run to print what would happen without applying.
 
 use std::os::unix::fs::PermissionsExt;
@@ -119,6 +120,12 @@ fn generate_netplan(iface: &str, ssid: &str, password: &str) -> String {
     )
 }
 
+/// Netplan config with the wifi interface left unconfigured — this is what
+/// "disconnected" looks like on a networkd system.
+fn generate_netplan_disconnected() -> String {
+    "network:\n  version: 2\n  renderer: networkd\n".to_string()
+}
+
 // ---------- system actions ----------
 
 fn scan_networks() -> Result<Vec<Network>, String> {
@@ -212,6 +219,43 @@ fn connect(ssid: &str, password: &str, dry_run: bool) -> Result<String, String> 
     Err("could not get connectivity — restored your previous network".into())
 }
 
+/// Remove the wifi config, apply it, and tear down the current association.
+fn disconnect(dry_run: bool) -> Result<(), String> {
+    let yaml = generate_netplan_disconnected();
+
+    if dry_run {
+        return Err(format!("dry-run — would write:\n{yaml}"));
+    }
+
+    if std::path::Path::new(NETPLAN_FILE).exists() {
+        std::fs::copy(NETPLAN_FILE, BACKUP_FILE).map_err(|e| format!("backup failed: {e} (run with sudo?)"))?;
+    }
+    std::fs::write(NETPLAN_FILE, &yaml).map_err(|e| format!("writing netplan failed: {e} (run with sudo?)"))?;
+    let _ = std::fs::set_permissions(NETPLAN_FILE, std::fs::Permissions::from_mode(0o600));
+
+    let out = Command::new("netplan").arg("apply").output().map_err(|e| format!("`netplan apply` failed: {e}"))?;
+    if !out.status.success() {
+        restore_backup();
+        return Err(format!("netplan apply error: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+
+    // netplan does not always drop an association it no longer manages, so break
+    // it explicitly. The link is deliberately left up — `iw scan` needs it up.
+    let _ = Command::new("systemctl").args(["stop", &format!("netplan-wpa-{}.service", IFACE)]).output();
+    let _ = Command::new("iw").args(["dev", IFACE, "disconnect"]).output();
+    let _ = Command::new("ip").args(["addr", "flush", "dev", IFACE]).output();
+    let _ = Command::new("ip").args(["link", "set", IFACE, "up"]).output();
+
+    for _ in 0..8 {
+        if current_ssid().is_none() {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(1000));
+    }
+
+    Err("still associated — something outside netplan is re-connecting the interface".into())
+}
+
 fn restore_backup() {
     if std::path::Path::new(BACKUP_FILE).exists() {
         let _ = std::fs::copy(BACKUP_FILE, NETPLAN_FILE);
@@ -224,6 +268,7 @@ fn restore_backup() {
 enum Msg {
     Scanned { nets: Vec<Network>, ssid: Option<String>, ip: Option<String>, error: Option<String> },
     Connected(Result<String, String>),
+    Disconnected(Result<(), String>),
 }
 
 #[derive(PartialEq)]
@@ -233,7 +278,16 @@ enum Screen {
     ManualSsid,
     Password,
     Connecting,
+    ConfirmDisconnect,
+    Disconnecting,
     Done,
+}
+
+/// Which action produced `App::result` — decides the wording on the Done screen.
+#[derive(PartialEq)]
+enum Action {
+    Connect,
+    Disconnect,
 }
 
 struct App {
@@ -248,6 +302,7 @@ struct App {
     password: String,
     show_password: bool,
     target_ssid: String,
+    last_action: Action,
     result: Option<Result<String, String>>,
     spinner: usize,
     dry_run: bool,
@@ -276,6 +331,7 @@ impl App {
             password: String::new(),
             show_password: false,
             target_ssid: String::new(),
+            last_action: Action::Connect,
             result: None,
             spinner: 0,
             dry_run,
@@ -299,6 +355,7 @@ impl App {
 
     fn start_connect(&mut self) {
         self.screen = Screen::Connecting;
+        self.last_action = Action::Connect;
         self.result = None;
         let tx = self.tx.clone();
         let ssid = self.target_ssid.clone();
@@ -309,23 +366,39 @@ impl App {
         });
     }
 
+    fn start_disconnect(&mut self) {
+        let Some(ssid) = self.connected_ssid.clone() else { return };
+        self.target_ssid = ssid;
+        self.screen = Screen::Disconnecting;
+        self.last_action = Action::Disconnect;
+        self.result = None;
+        let tx = self.tx.clone();
+        let dry = self.dry_run;
+        thread::spawn(move || {
+            let _ = tx.send(Msg::Disconnected(disconnect(dry)));
+        });
+    }
+
     fn handle_msg(&mut self, msg: Msg) {
         match msg {
             Msg::Scanned { nets, ssid, ip, error } => {
                 self.connected_ssid = ssid;
                 self.connected_ip = ip;
                 self.scan_error = error;
-                self.selectable = std::iter::once(true)
-                    .chain(nets.iter().map(|n| self.connected_ssid.as_deref() != Some(n.ssid.as_str())))
-                    .collect();
+                // every row is selectable — Enter on the connected one disconnects
+                self.selectable = vec![true; nets.len() + 1];
                 self.nets = nets;
-                // select the first selectable real network, else the manual entry
+                // select the first real network, else the manual entry
                 let first = (1..self.selectable.len()).find(|&i| self.selectable[i]).unwrap_or(0);
                 self.state.select(Some(first));
                 self.screen = Screen::List;
             }
             Msg::Connected(res) => {
                 self.result = Some(res);
+                self.screen = Screen::Done;
+            }
+            Msg::Disconnected(res) => {
+                self.result = Some(res.map(|()| String::new()));
                 self.screen = Screen::Done;
             }
         }
@@ -349,7 +422,7 @@ impl App {
     /// Returns true if the app should quit.
     fn handle_key(&mut self, code: KeyCode, mods: KeyModifiers) -> bool {
         match self.screen {
-            Screen::Loading | Screen::Connecting => {
+            Screen::Loading | Screen::Connecting | Screen::Disconnecting => {
                 if self.screen == Screen::Loading && matches!(code, KeyCode::Char('q')) {
                     return true;
                 }
@@ -357,6 +430,12 @@ impl App {
             Screen::List => match code {
                 KeyCode::Char('q') | KeyCode::Esc => return true,
                 KeyCode::Char('r') => self.start_scan(),
+                KeyCode::Char('d') => {
+                    if let Some(ssid) = self.connected_ssid.clone() {
+                        self.target_ssid = ssid;
+                        self.screen = Screen::ConfirmDisconnect;
+                    }
+                }
                 KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
                 KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
                 KeyCode::Enter => {
@@ -367,14 +446,22 @@ impl App {
                         }
                         Some(i) => {
                             self.target_ssid = self.nets[i - 1].ssid.clone();
-                            self.password.clear();
-                            self.show_password = false;
-                            self.screen = Screen::Password;
+                            if self.connected_ssid.as_deref() == Some(self.target_ssid.as_str()) {
+                                self.screen = Screen::ConfirmDisconnect;
+                            } else {
+                                self.password.clear();
+                                self.show_password = false;
+                                self.screen = Screen::Password;
+                            }
                         }
                         None => {}
                     }
                 }
                 _ => {}
+            },
+            Screen::ConfirmDisconnect => match code {
+                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => self.start_disconnect(),
+                _ => self.screen = Screen::List,
             },
             Screen::ManualSsid => match code {
                 KeyCode::Esc => self.screen = Screen::List,
@@ -452,6 +539,21 @@ impl App {
                     Style::new().cyan(),
                 )),
             ], "please wait"),
+            Screen::ConfirmDisconnect => self.render_center(f, inner, vec![
+                Line::from(Span::styled(
+                    format!("Disconnect from \"{}\"?", self.target_ssid),
+                    Style::new().yellow().add_modifier(Modifier::BOLD),
+                )),
+                Line::raw(""),
+                Line::from(Span::styled("If you reached this machine over SSH via this network,", Style::new().dark_gray())),
+                Line::from(Span::styled("you will lose this session.", Style::new().dark_gray())),
+            ], "y disconnect    n / Esc cancel"),
+            Screen::Disconnecting => self.render_center(f, inner, vec![
+                Line::from(Span::styled(
+                    format!("{}  Disconnecting from \"{}\" …", SPINNER[self.spinner % SPINNER.len()], self.target_ssid),
+                    Style::new().cyan(),
+                )),
+            ], "please wait"),
             Screen::Done => self.render_done(f, inner),
         }
     }
@@ -507,7 +609,7 @@ impl App {
         f.render_stateful_widget(list, rows[0].inner(ratatui::layout::Margin::new(1, 0)), &mut self.state);
 
         let footer = Line::from(Span::styled(
-            "  ↑/↓ move    ⏎ select    r rescan    q quit",
+            "  ↑/↓ move    ⏎ select    d disconnect    r rescan    q quit",
             Style::new().dark_gray(),
         ));
         f.render_widget(Paragraph::new(footer), rows[1]);
@@ -539,18 +641,28 @@ impl App {
     }
 
     fn render_done(&mut self, f: &mut Frame, area: Rect) {
-        let lines = match &self.result {
-            Some(Ok(ip)) => vec![
+        let lines = match (&self.last_action, &self.result) {
+            (Action::Connect, Some(Ok(ip))) => vec![
                 Line::from(Span::styled(format!("✓  Connected to \"{}\"", self.target_ssid), Style::new().green().add_modifier(Modifier::BOLD))),
                 Line::raw(""),
                 Line::from(Span::styled(format!("IP {ip}"), Style::new().green())),
             ],
-            Some(Err(e)) => vec![
+            (Action::Disconnect, Some(Ok(_))) => vec![
+                Line::from(Span::styled(format!("✓  Disconnected from \"{}\"", self.target_ssid), Style::new().green().add_modifier(Modifier::BOLD))),
+                Line::raw(""),
+                Line::from(Span::styled("The wifi config has been cleared.", Style::new().dark_gray())),
+            ],
+            (Action::Connect, Some(Err(e))) => vec![
                 Line::from(Span::styled(format!("✗  Failed to connect to \"{}\"", self.target_ssid), Style::new().red().add_modifier(Modifier::BOLD))),
                 Line::raw(""),
                 Line::from(Span::styled(e.clone(), Style::new().red())),
             ],
-            None => vec![Line::raw("…")],
+            (Action::Disconnect, Some(Err(e))) => vec![
+                Line::from(Span::styled(format!("✗  Failed to disconnect from \"{}\"", self.target_ssid), Style::new().red().add_modifier(Modifier::BOLD))),
+                Line::raw(""),
+                Line::from(Span::styled(e.clone(), Style::new().red())),
+            ],
+            (_, None) => vec![Line::raw("…")],
         };
         self.render_center(f, area, lines, "⏎ back to list    q quit");
     }
@@ -586,6 +698,10 @@ fn snapshot(which: &str) {
             app.target_ssid = app.connected_ssid.clone().unwrap_or_else(|| "S1".into());
             app.password = "hunter2".into();
             app.screen = Screen::Password;
+        }
+        "confirm" => {
+            app.target_ssid = app.connected_ssid.clone().unwrap_or_else(|| "S1".into());
+            app.screen = Screen::ConfirmDisconnect;
         }
         "done" => {
             app.target_ssid = app.connected_ssid.clone().unwrap_or_else(|| "S1".into());
@@ -670,6 +786,23 @@ fn main() {
             std::process::exit(2);
         }
         run_connect_cli(&ssid, &pass, dry_run);
+        return;
+    }
+
+    if args.iter().any(|a| a == "--disconnect") {
+        match current_ssid() {
+            Some(ssid) => {
+                println!("Disconnecting from \"{ssid}\"…");
+                match disconnect(dry_run) {
+                    Ok(()) => println!("✓ Disconnected from \"{ssid}\""),
+                    Err(e) => {
+                        println!("✗ {e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            None => println!("Not connected"),
+        }
         return;
     }
 
@@ -769,6 +902,15 @@ BSS 99:88:77:66:55:44(on wlp1s0)
     fn netplan_open_network() {
         let y = generate_netplan("wlp1s0", "OpenNet", "");
         assert!(y.contains("\"OpenNet\": {}"));
+        assert!(!y.contains("password:"));
+    }
+
+    #[test]
+    fn netplan_disconnected_drops_the_wifi_config() {
+        let y = generate_netplan_disconnected();
+        assert!(y.contains("renderer: networkd"));
+        assert!(!y.contains("access-points"));
+        assert!(!y.contains("wifis"));
         assert!(!y.contains("password:"));
     }
 
