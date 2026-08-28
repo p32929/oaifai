@@ -1,0 +1,39 @@
+name: release
+
+# Builds the Linux x86_64 binary that install.sh downloads from
+# releases/latest, and attaches it to the release for the pushed tag.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install musl target
+        run: |
+          rustup target add x86_64-unknown-linux-musl
+          sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Test
+        run: cargo test --locked
+
+      # musl => a static binary that runs on any glibc version.
+      - name: Build
+        run: cargo build --release --locked --target x86_64-unknown-linux-musl
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bin=target/x86_64-unknown-linux-musl/release/oaifai
+          tag="${GITHUB_REF_NAME}"
+          if [ "$tag" = "master" ]; then tag="v$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"; fi
+          gh release create "$tag" "$bin" --title "$tag" --generate-notes 2>/dev/null \
+            || gh release upload "$tag" "$bin" --clobber

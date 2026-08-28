@@ -9,6 +9,7 @@
 //   sudo oaifai --list                        # plain list, no changes
 //   sudo oaifai --connect "SSID" "PASSWORD"   # non-interactive
 //   sudo oaifai --disconnect                  # drop the current network
+//   oaifai --version
 //   add --dry-run to print what would happen without applying.
 
 use std::os::unix::fs::PermissionsExt;
@@ -278,7 +279,6 @@ enum Screen {
     ManualSsid,
     Password,
     Connecting,
-    ConfirmDisconnect,
     Disconnecting,
     Done,
 }
@@ -421,6 +421,16 @@ impl App {
 
     /// Returns true if the app should quit.
     fn handle_key(&mut self, code: KeyCode, mods: KeyModifiers) -> bool {
+        // `d` disconnects immediately, from any screen that is not a text field
+        // and is not already busy.
+        if code == KeyCode::Char('d')
+            && !matches!(self.screen, Screen::ManualSsid | Screen::Password | Screen::Connecting | Screen::Disconnecting)
+            && self.connected_ssid.is_some()
+        {
+            self.start_disconnect();
+            return false;
+        }
+
         match self.screen {
             Screen::Loading | Screen::Connecting | Screen::Disconnecting => {
                 if self.screen == Screen::Loading && matches!(code, KeyCode::Char('q')) {
@@ -430,12 +440,6 @@ impl App {
             Screen::List => match code {
                 KeyCode::Char('q') | KeyCode::Esc => return true,
                 KeyCode::Char('r') => self.start_scan(),
-                KeyCode::Char('d') => {
-                    if let Some(ssid) = self.connected_ssid.clone() {
-                        self.target_ssid = ssid;
-                        self.screen = Screen::ConfirmDisconnect;
-                    }
-                }
                 KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
                 KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
                 KeyCode::Enter => {
@@ -447,7 +451,7 @@ impl App {
                         Some(i) => {
                             self.target_ssid = self.nets[i - 1].ssid.clone();
                             if self.connected_ssid.as_deref() == Some(self.target_ssid.as_str()) {
-                                self.screen = Screen::ConfirmDisconnect;
+                                self.start_disconnect();
                             } else {
                                 self.password.clear();
                                 self.show_password = false;
@@ -458,10 +462,6 @@ impl App {
                     }
                 }
                 _ => {}
-            },
-            Screen::ConfirmDisconnect => match code {
-                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => self.start_disconnect(),
-                _ => self.screen = Screen::List,
             },
             Screen::ManualSsid => match code {
                 KeyCode::Esc => self.screen = Screen::List,
@@ -539,15 +539,6 @@ impl App {
                     Style::new().cyan(),
                 )),
             ], "please wait"),
-            Screen::ConfirmDisconnect => self.render_center(f, inner, vec![
-                Line::from(Span::styled(
-                    format!("Disconnect from \"{}\"?", self.target_ssid),
-                    Style::new().yellow().add_modifier(Modifier::BOLD),
-                )),
-                Line::raw(""),
-                Line::from(Span::styled("If you reached this machine over SSH via this network,", Style::new().dark_gray())),
-                Line::from(Span::styled("you will lose this session.", Style::new().dark_gray())),
-            ], "y disconnect    n / Esc cancel"),
             Screen::Disconnecting => self.render_center(f, inner, vec![
                 Line::from(Span::styled(
                     format!("{}  Disconnecting from \"{}\" …", SPINNER[self.spinner % SPINNER.len()], self.target_ssid),
@@ -699,10 +690,6 @@ fn snapshot(which: &str) {
             app.password = "hunter2".into();
             app.screen = Screen::Password;
         }
-        "confirm" => {
-            app.target_ssid = app.connected_ssid.clone().unwrap_or_else(|| "S1".into());
-            app.screen = Screen::ConfirmDisconnect;
-        }
         "done" => {
             app.target_ssid = app.connected_ssid.clone().unwrap_or_else(|| "S1".into());
             app.result = Some(Ok(app.connected_ip.clone().unwrap_or_else(|| "192.168.1.30".into())));
@@ -771,6 +758,11 @@ fn reexec_with_sudo() -> ! {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let dry_run = args.iter().any(|a| a == "--dry-run");
+
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("oaifai {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
 
     // Everything except headless snapshot rendering needs root (scan + netplan).
     // Auto-elevate so users can simply run `oaifai`.

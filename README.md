@@ -29,10 +29,12 @@ It auto-asks for your `sudo` password (needed to scan and change network setting
 
 ## Usage
 
-In the list: `↑/↓` move, `⏎` connect to the selected network, `d` disconnect from the
-current one, `r` rescan, `q` quit. Pressing `⏎` on the network you are already connected
-to also offers to disconnect. Disconnecting asks for confirmation first — if you reached
-the machine over SSH via that network, you will lose the session.
+Press **`d` anywhere to disconnect** from the current network — it happens straight away,
+no confirmation. Note that if you reached the machine over SSH via that network, this drops
+your session.
+
+In the list: `↑/↓` move, `⏎` connect to the selected network (or disconnect, if it is the
+one you are on), `r` rescan, `q` quit.
 
 Non-interactive:
 
@@ -40,6 +42,7 @@ Non-interactive:
 sudo oaifai --list                        # show current network + scan results
 sudo oaifai --connect "SSID" "PASSWORD"   # connect (omit the password for open networks)
 sudo oaifai --disconnect                  # drop the current network
+oaifai --version                          # check which build you have
 ```
 
 Add `--dry-run` to print what would be written without applying it.
